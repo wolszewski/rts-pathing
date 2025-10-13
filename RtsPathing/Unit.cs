@@ -5,7 +5,7 @@ using System.Numerics;
 // ----------------------------
 // Types & helpers
 // ----------------------------
-struct Unit
+public struct Unit
 {
     public Vector2 Pos;
     public Vector2 Vel;
@@ -13,4 +13,5 @@ struct Unit
     public bool Selected;
     public bool HasTarget;
     public Vector2 Target;
+    public float Facing; // Angle in radians that the unit is currently facing
 }

@@ -4,20 +4,13 @@
 using System.Numerics;
 using Raylib_cs;
 
-// ----------------------------
-// Config
-// ----------------------------
-const int ScreenW = 1280;
-const int ScreenH = 720;
-const int TargetFps = 240;           // render cap (high so vsync/off works smoothly)
-const float TickDt = 0.05f;         // 5ms fixed tick (200 Hz)
 
 // Camera params
 float zoom = 1.0f;
 var cam = new Camera2D
 {
     Target = Vector2.Zero,
-    Offset = new Vector2(ScreenW / 2f, ScreenH / 2f),
+    Offset = new Vector2(GameConfig.ScreenW / 2f, GameConfig.ScreenH / 2f),
     Rotation = 0f,
     Zoom = zoom
 };
@@ -38,13 +31,13 @@ for (int i = 0; i < unitCount; i++)
 {
     var p = new Vector2(rng.Next(-350, 351), rng.Next(-350, 351));
     var v = Vector2.Zero;
-    units[i] = new Unit { Pos = p, Vel = v, Radius = 8f, Selected = false, HasTarget = false, Target = p };
+    units[i] = new Unit { Pos = p, Vel = v, Radius = 8f, Selected = false, HasTarget = false, Target = p, Facing = 0f };
 }
 
 // Init window
 Raylib.SetConfigFlags(ConfigFlags.VSyncHint); // keep smooth; remove if you want uncapped
-Raylib.InitWindow(ScreenW, ScreenH, "2D RTS Pathing – Rendering Scaffold (raylib-cs)");
-Raylib.SetTargetFPS(TargetFps);
+Raylib.InitWindow(GameConfig.ScreenW, GameConfig.ScreenH, "2D RTS Pathing – Rendering Scaffold (raylib-cs)");
+Raylib.SetTargetFPS(GameConfig.TargetFps);
 
 // Fixed timestep accumulator
 double accumulator = 0.0;
@@ -194,62 +187,33 @@ while (!Raylib.WindowShouldClose())
     // ----------------------------
     // Fixed update loop (5ms)
     // ----------------------------
-    while (accumulator >= TickDt)
+    while (accumulator >= GameConfig.TickDt)
     {
-        FixedUpdate((float)TickDt, units, obstacles);
-        accumulator -= TickDt;
+        FixedUpdate((float)GameConfig.TickDt, units, obstacles);
+        accumulator -= GameConfig.TickDt;
         tickCounter++;
     }
 
     // ----------------------------
     // Render
     // ----------------------------
-    Raylib.BeginDrawing();  
+    Raylib.BeginDrawing();
     Raylib.ClearBackground(Color.DarkGray);
 
     Raylib.BeginMode2D(cam);
 
-    // Draw grid
-    DrawGrid(50, 50);
-
-    // Draw obstacles
-    foreach (var seg in obstacles)
-        Raylib.DrawLineEx(seg.A, seg.B, 3f, Color.Red);
-
-    // Draw units
-    foreach (ref var u in units.AsSpan())
-    {
-        Raylib.DrawCircleV(u.Pos, u.Radius, Color.SkyBlue);
-        if (u.Selected)
-        {
-            Raylib.DrawCircleLines((int)u.Pos.X, (int)u.Pos.Y, u.Radius + 1.5f, Color.Yellow);
-        }
-        // velocity tick
-        Raylib.DrawLineV(u.Pos, u.Pos + (u.Vel.LengthSquared() > 1e-6f ? Vector2.Normalize(u.Vel) : Vector2.Zero) * (u.Radius * 1.5f), Color.Blue);
-    }
-
+    Renderer.DrawGrid(50, 50);
+    Renderer.DrawObstacles(obstacles);
+    Renderer.DrawUnits(units);
     Raylib.EndMode2D();
 
     // Selection rectangle (screen-space overlay)
     if (isSelecting)
     {
-        float x0 = MathF.Min(selectStartScreen.X, selectEndScreen.X);
-        float y0 = MathF.Min(selectStartScreen.Y, selectEndScreen.Y);
-        float x1 = MathF.Max(selectStartScreen.X, selectEndScreen.X);
-        float y1 = MathF.Max(selectStartScreen.Y, selectEndScreen.Y);
-        var rect = new Rectangle(x0, y0, x1 - x0, y1 - y0);
-        Raylib.DrawRectangleRec(rect, ColorAlpha(Color.Yellow, 0.25f));
-        Raylib.DrawRectangleLinesEx(rect, 1.5f, Color.Yellow);
+        Renderer.DrawSelectionBox(selectStartScreen, selectEndScreen);
     }
 
-    // UI overlay
-    Raylib.DrawRectangle(10, 10, 470, 120, ColorAlpha(Color.Black, 0.45f));
-    int y = 18;
-    Raylib.DrawText("Controls:", 20, y, 18, Color.RayWhite); y += 22;
-    Raylib.DrawText("WASD - pan   Q/E or wheel - zoom   R - reset view", 20, y, 16, Color.RayWhite); y += 20;
-    Raylib.DrawText("LMB drag - select units   RMB - move selected to point", 20, y, 16, Color.RayWhite); y += 20;
-    Raylib.DrawText($"Tick dt: {TickDt * 1000f:0.#} ms (200 Hz) | Ticks: {tickCounter}", 20, y, 16, Color.RayWhite); y += 20;
-    Raylib.DrawText($"FPS: {Raylib.GetFPS()}   Zoom: {zoom:0.00}   Units: {units.Length}", 20, y, 16, Color.RayWhite);
+    Renderer.DrawOverlay(zoom, units, tickCounter);
 
     Raylib.EndDrawing();
 }
@@ -260,8 +224,8 @@ Raylib.CloseWindow();
 
 static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacles)
 {
-    const float MaxSpeed = 120f;
-    const float ArriveDist = 6f;
+    float sharpTurnThreshold = (180f - GameConfig.SharpTurnAngleDeg) * MathF.PI / 180f;
+    // If angle difference is greater than this, unit stops to rotate in place
 
     // 1) Move towards targets
     for (int i = 0; i < units.Length; i++)
@@ -272,15 +236,51 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
         {
             Vector2 to = u.Target - u.Pos;
             float dist = to.Length();
-            if (dist <= ArriveDist)
+            if (dist <= GameConfig.ArriveDist)
             {
                 u.HasTarget = false;
                 u.Vel = Vector2.Zero;
             }
             else
             {
-                var dir = to / dist;
-                u.Vel = dir * MaxSpeed;
+                var desiredDir = to / dist;
+                float targetAngle = MathF.Atan2(desiredDir.Y, desiredDir.X);
+                
+                // Calculate initial angle difference to determine if sharp turn is needed
+                float initialAngleDiff = NormalizeAngle(targetAngle - u.Facing);
+                
+                // Check if we need a sharp turn BEFORE rotating
+                bool isSharpTurn = MathF.Abs(initialAngleDiff) > sharpTurnThreshold;
+                
+                // Smooth rotation towards target angle
+                float maxRotation = GameConfig.RotationSpeed * dt;
+                
+                if (MathF.Abs(initialAngleDiff) <= maxRotation)
+                {
+                    // Close enough, snap to target angle
+                    u.Facing = targetAngle;
+                }
+                else
+                {
+                    // Rotate by max amount in the correct direction
+                    u.Facing += MathF.Sign(initialAngleDiff) * maxRotation;
+                }
+                
+                // Normalize facing angle to [-PI, PI]
+                u.Facing = NormalizeAngle(u.Facing);
+                
+                // Apply velocity based on whether it's a sharp turn
+                if (isSharpTurn)
+                {
+                    // Sharp turn required - stop and rotate in place
+                    u.Vel = Vector2.Zero;
+                }
+                else
+                {
+                    // Can move while rotating
+                    Vector2 currentDir = new Vector2(MathF.Cos(u.Facing), MathF.Sin(u.Facing));
+                    u.Vel = currentDir * GameConfig.MaxSpeed;
+                }
             }
         }
         else
@@ -329,19 +329,15 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
     }
 }
 
-static void DrawGrid(int halfCells, int cellSize)
+// Helper to normalize angle to [-PI, PI] range
+static float NormalizeAngle(float angle)
 {
-    int ext = halfCells * cellSize;
-    for (int i = -halfCells; i <= halfCells; i++)
-    {
-        int x = i * cellSize;
-        Raylib.DrawLine(x, -ext, x, ext, i == 0 ? Color.LightGray : ColorAlpha(Color.LightGray, 0.5f));
-    }
-    for (int j = -halfCells; j <= halfCells; j++)
-    {
-        int y = j * cellSize;
-        Raylib.DrawLine(-ext, y, ext, y, j == 0 ? Color.LightGray : ColorAlpha(Color.LightGray, 0.5f));
-    }
+    while (angle > MathF.PI) angle -= MathF.PI * 2;
+    while (angle < -MathF.PI) angle += MathF.PI * 2;
+    return angle;
 }
 
-static Color ColorAlpha(Color c, float a) => new Color(c.R, c.G, c.B, (byte)(a * 255));
+public static class GameClock
+{
+
+}
