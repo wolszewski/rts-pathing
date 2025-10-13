@@ -18,4 +18,7 @@ public struct Unit
     // Stuck detection
     public float StuckTimer;          // How long unit has been stuck
     public float LastDistToTarget;    // Distance to target in previous frame
+    
+    // Group movement
+    public int GroupId;               // Units with same GroupId belong to the same formation
 }

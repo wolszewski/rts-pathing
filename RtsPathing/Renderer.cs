@@ -53,7 +53,16 @@ public static class Renderer
 
     public static void DrawUnits(Unit[] units)
     {
-        // Draw units
+        // First draw target lines (so they appear behind units)
+        foreach (ref var u in units.AsSpan())
+        {
+            if (u.HasTarget)
+            {
+                DrawDashedLine(u.Pos, u.Target, 2f, 8f, 4f, Color.Yellow);
+            }
+        }
+        
+        // Then draw units on top
         foreach (ref var u in units.AsSpan())
         {
             DrawUnit(ref u);
@@ -78,6 +87,32 @@ public static class Renderer
             Vector2 velDir = Vector2.Normalize(u.Vel);
             Vector2 velTip = u.Pos + velDir * (u.Radius * 1.2f);
             Raylib.DrawCircleV(velTip, 2f, Color.Green);
+        }
+    }
+    
+    /// <summary>
+    /// Draws a dashed line between two points
+    /// </summary>
+    private static void DrawDashedLine(Vector2 start, Vector2 end, float thickness, float dashLength, float gapLength, Color color)
+    {
+        Vector2 direction = end - start;
+        float totalLength = direction.Length();
+        
+        if (totalLength < 0.001f) return;
+        
+        Vector2 normalizedDir = direction / totalLength;
+        float patternLength = dashLength + gapLength;
+        
+        float currentDist = 0f;
+        while (currentDist < totalLength)
+        {
+            float dashEnd = MathF.Min(currentDist + dashLength, totalLength);
+            Vector2 dashStart = start + normalizedDir * currentDist;
+            Vector2 dashEndPos = start + normalizedDir * dashEnd;
+            
+            Raylib.DrawLineEx(dashStart, dashEndPos, thickness, color);
+            
+            currentDist += patternLength;
         }
     }
 

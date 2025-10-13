@@ -25,7 +25,7 @@ var obstacles = new (Vector2 A, Vector2 B)[] {
 
 // Units: simple circles with positions/vels (placeholder for your pathing)
 var rng = new Random(42);
-int unitCount = 300;
+int unitCount = 50;
 var units = new Unit[unitCount];
 for (int i = 0; i < unitCount; i++)
 {
@@ -41,7 +41,8 @@ for (int i = 0; i < unitCount; i++)
         Target = p,
         Facing = 0f,
         StuckTimer = 0f,
-        LastDistToTarget = 0f
+        LastDistToTarget = 0f,
+        GroupId = 0  // 0 means no group
     };
 }
 
@@ -185,15 +186,36 @@ while (!Raylib.WindowShouldClose())
     if (Raylib.IsMouseButtonPressed(MouseButton.Right))
     {
         var clickWorld = Raylib.GetScreenToWorld2D(Raylib.GetMousePosition(), cam);
+        
+        // Collect selected unit indices
+        var selectedIndices = new List<int>();
         for (int i = 0; i < units.Length; i++)
         {
-            if (!units[i].Selected) continue;
-            var u = units[i];
-            u.Target = clickWorld;
-            u.HasTarget = true;
-            u.StuckTimer = 0f; // Reset stuck timer on new command
-            u.LastDistToTarget = Vector2.Distance(u.Pos, clickWorld);
-            units[i] = u;
+            if (units[i].Selected)
+                selectedIndices.Add(i);
+        }
+        
+        if (selectedIndices.Count > 0)
+        {
+            // Calculate formation positions around the clicked point
+            Vector2[] formationPositions;
+            if (GameConfig.UseCircularFormation)
+            {
+                formationPositions = FormationCalculator.CalculateCircularFormation(
+                    clickWorld, 
+                    selectedIndices.Count, 
+                    GameConfig.FormationSpacing);
+            }
+            else
+            {
+                formationPositions = FormationCalculator.CalculateGridFormation(
+                    clickWorld, 
+                    selectedIndices.Count, 
+                    GameConfig.FormationSpacing);
+            }
+            
+            // Assign formation positions to units
+            FormationCalculator.AssignFormationPositions(units, selectedIndices.ToArray(), formationPositions);
         }
     }
 
@@ -388,7 +410,7 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
         units[i] = u;
     }
 
-    // 2) Unit-unit collision resolution - only push stationary units apart
+    // 2) Unit-unit collision resolution with group awareness
     for (int i = 0; i < units.Length; i++)
     {
         for (int j = i + 1; j < units.Length; j++)
@@ -410,6 +432,9 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
                 bool iMoving = ui.HasTarget && ui.Vel.LengthSquared() > 1f;
                 bool jMoving = uj.HasTarget && uj.Vel.LengthSquared() > 1f;
                 
+                // Check if units are in the same group
+                bool sameGroup = ui.GroupId > 0 && ui.GroupId == uj.GroupId;
+                
                 if (!iMoving && !jMoving)
                 {
                     // Both stationary - push apart evenly
@@ -418,13 +443,47 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
                 }
                 else if (iMoving && !jMoving)
                 {
-                    // i is moving, j is stationary - only push i back
-                    ui.Pos -= n * penetration;
+                    if (sameGroup)
+                    {
+                        // Same group: moving unit can push stationary unit
+                        // Push stationary unit and wake it up
+                        uj.Pos += n * penetration;
+                        
+                        // If stationary unit has a target (but stopped), reactivate it
+                        if (!uj.HasTarget && Vector2.Distance(uj.Pos, uj.Target) > GameConfig.ArriveDist)
+                        {
+                            uj.HasTarget = true;
+                            uj.StuckTimer = 0f;
+                            uj.LastDistToTarget = Vector2.Distance(uj.Pos, uj.Target);
+                        }
+                    }
+                    else
+                    {
+                        // Different groups: only push moving unit back
+                        ui.Pos -= n * penetration;
+                    }
                 }
                 else if (!iMoving && jMoving)
                 {
-                    // j is moving, i is stationary - only push j back
-                    uj.Pos += n * penetration;
+                    if (sameGroup)
+                    {
+                        // Same group: moving unit can push stationary unit
+                        // Push stationary unit and wake it up
+                        ui.Pos -= n * penetration;
+                        
+                        // If stationary unit has a target (but stopped), reactivate it
+                        if (!ui.HasTarget && Vector2.Distance(ui.Pos, ui.Target) > GameConfig.ArriveDist)
+                        {
+                            ui.HasTarget = true;
+                            ui.StuckTimer = 0f;
+                            ui.LastDistToTarget = Vector2.Distance(ui.Pos, ui.Target);
+                        }
+                    }
+                    else
+                    {
+                        // Different groups: only push moving unit back
+                        uj.Pos += n * penetration;
+                    }
                 }
                 else
                 {

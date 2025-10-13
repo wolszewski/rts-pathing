@@ -18,4 +18,11 @@ public static class GameConfig
     // Collision avoidance config
     public const float AvoidanceRange = 25f;        // distance at which units start avoiding each other
     public const float AvoidanceStrength = 100f;    // strength of avoidance force
+    
+    // Formation config
+    public const float FormationSpacing = 20f;      // space between units in formation
+    public const bool UseCircularFormation = true; // true = circular, false = grid formation
+    
+    // Group movement config
+    public const float GroupPushDetectionThreshold = 5f; // distance moved to detect being pushed by group member
 }
