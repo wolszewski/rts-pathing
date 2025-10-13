@@ -216,6 +216,7 @@ public static class FormationCalculator
             u.GroupId = groupId;
             u.WasPushed = false; // Clear any push state when given new target
             u.TotalPushDistance = 0f; // Reset accumulated push distance
+            u.PushRecoveryTimer = 0f; // Reset recovery timer when given new command
             // RestPosition will be updated when unit reaches target
             units[unitIdx] = u;
             

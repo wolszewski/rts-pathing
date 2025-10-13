@@ -45,7 +45,8 @@ for (int i = 0; i < unitCount; i++)
         GroupId = 0,  // 0 means no group
         RestPosition = p,  // Initial rest position
         WasPushed = false,
-        TotalPushDistance = 0f
+        TotalPushDistance = 0f,
+        PushRecoveryTimer = 0f
     };
 }
 
@@ -280,37 +281,73 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
             Vector2 toRest = u.RestPosition - u.Pos;
             float distToRest = toRest.Length();
             
-            if (distToRest <= GameConfig.ArriveDist)
+            // Increment recovery timer
+            u.PushRecoveryTimer += dt;
+            
+            // Give up if taking too long to return (prevents infinite circling)
+            if (u.PushRecoveryTimer > 3.0f) // 3 seconds timeout
             {
-                // Arrived back at rest position
                 u.WasPushed = false;
                 u.Vel = Vector2.Zero;
                 u.TotalPushDistance = 0f;
+                u.PushRecoveryTimer = 0f;
+                u.RestPosition = u.Pos; // Accept new position as rest position
             }
             else
             {
-                // Move back to rest position at reduced speed
-                var dir = toRest / distToRest;
-                float targetAngle = MathF.Atan2(dir.Y, dir.X);
-                
-                // Smooth rotation towards target angle
-                float initialAngleDiff = NormalizeAngle(targetAngle - u.Facing);
-                float maxRotation = GameConfig.RotationSpeed * dt;
-                
-                if (MathF.Abs(initialAngleDiff) <= maxRotation)
+                // Use larger threshold if being pushed by nearby units (prevents circling at rest position)
+                float arriveThreshold = GameConfig.ArriveDist;
+                if (distToRest < 15f) // Near rest position
                 {
-                    u.Facing = targetAngle;
+                    // Count how many units are very close
+                    int nearbyCount = 0;
+                    for (int k = 0; k < units.Length; k++)
+                    {
+                        if (k == i) continue;
+                        float nearDist = Vector2.Distance(u.Pos, units[k].Pos);
+                        if (nearDist < u.Radius + units[k].Radius + 5f)
+                            nearbyCount++;
+                    }
+                    // If crowded, accept arrival easier
+                    if (nearbyCount >= 2)
+                        arriveThreshold = GameConfig.ArriveDist * 2.5f;
+                }
+                
+                if (distToRest <= arriveThreshold)
+                {
+                    // Arrived back at rest position
+                    u.WasPushed = false;
+                    u.Vel = Vector2.Zero;
+                    u.TotalPushDistance = 0f;
+                    u.PushRecoveryTimer = 0f;
                 }
                 else
                 {
-                    u.Facing += MathF.Sign(initialAngleDiff) * maxRotation;
+                    // Move back to rest position at reduced speed
+                    var dir = toRest / distToRest;
+                    float targetAngle = MathF.Atan2(dir.Y, dir.X);
+                    
+                    // Smooth rotation towards target angle
+                    float initialAngleDiff = NormalizeAngle(targetAngle - u.Facing);
+                    float maxRotation = GameConfig.RotationSpeed * dt;
+                    
+                    if (MathF.Abs(initialAngleDiff) <= maxRotation)
+                    {
+                        u.Facing = targetAngle;
+                    }
+                    else
+                    {
+                        u.Facing += MathF.Sign(initialAngleDiff) * maxRotation;
+                    }
+                    
+                    u.Facing = NormalizeAngle(u.Facing);
+                    
+                    // Move at reduced speed toward rest position
+                    // Slow down as we approach to reduce overshoot
+                    float speedScale = distToRest > 20f ? 1f : Math.Max(0.4f, distToRest / 20f);
+                    Vector2 currentDir = new Vector2(MathF.Cos(u.Facing), MathF.Sin(u.Facing));
+                    u.Vel = currentDir * GameConfig.ReturnToRestSpeed * speedScale;
                 }
-                
-                u.Facing = NormalizeAngle(u.Facing);
-                
-                // Move at reduced speed toward rest position
-                Vector2 currentDir = new Vector2(MathF.Cos(u.Facing), MathF.Sin(u.Facing));
-                u.Vel = currentDir * GameConfig.ReturnToRestSpeed;
             }
         }
         else if (u.HasTarget)

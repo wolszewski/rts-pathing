@@ -26,4 +26,5 @@ public struct Unit
     public Vector2 RestPosition;      // Position to return to when pushed (for stationary units)
     public bool WasPushed;            // Flag indicating unit was pushed and needs to return
     public float TotalPushDistance;   // Accumulates total distance pushed to trigger recovery
+    public float PushRecoveryTimer;   // How long unit has been trying to return to rest (prevents infinite circling)
 }
