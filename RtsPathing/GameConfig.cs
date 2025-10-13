@@ -16,11 +16,11 @@ public static class GameConfig
     public const float StuckProgressThreshold = 1f; // units/sec - minimum progress speed to not be considered stuck
     
     // Collision avoidance config
-    public const float AvoidanceRange = 25f;        // distance at which units start avoiding each other
-    public const float AvoidanceStrength = 100f;    // strength of avoidance force
+    public const float AvoidanceRange = 15f;        // distance at which units start avoiding each other
+    public const float AvoidanceStrength = 0.3f;    // strength of avoidance force (reduced from 100f - should be on same scale as desired direction)
     
     // Formation config
-    public const float FormationSpacing = 25f;      // space between units in formation
+    public const float FormationSpacing = 20f;      // space between units in formation
     public const bool UseCircularFormation = true; // true = circular, false = grid formation
     
     // Push recovery config

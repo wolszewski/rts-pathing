@@ -319,7 +319,25 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
             float dist = to.Length();
             
             // Check if unit arrived at target
-            if (dist <= GameConfig.ArriveDist)
+            // Use larger threshold if being pushed by nearby units (prevents circling at destination)
+            float arriveThreshold = GameConfig.ArriveDist;
+            if (dist < 15f) // Near destination
+            {
+                // Count how many units are very close
+                int nearbyCount = 0;
+                for (int k = 0; k < units.Length; k++)
+                {
+                    if (k == i) continue;
+                    float nearDist = Vector2.Distance(u.Pos, units[k].Pos);
+                    if (nearDist < u.Radius + units[k].Radius + 5f)
+                        nearbyCount++;
+                }
+                // If crowded, accept arrival easier
+                if (nearbyCount >= 2)
+                    arriveThreshold = GameConfig.ArriveDist * 2.5f;
+            }
+            
+            if (dist <= arriveThreshold)
             {
                 u.HasTarget = false;
                 u.Vel = Vector2.Zero;
@@ -361,37 +379,48 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
                 {
                     var desiredDir = to / dist;
                     
+                    // Calculate how close we are to target (0 = far, 1 = arrived)
+                    float arrivalFactor = 1f - Math.Clamp((dist - GameConfig.ArriveDist) / 50f, 0f, 1f);
+                    
                     // Calculate avoidance force from nearby units
                     Vector2 avoidanceForce = Vector2.Zero;
-                    for (int j = 0; j < units.Length; j++)
+                    
+                    // Only calculate avoidance if not very close to target (prevents circling at destination)
+                    if (dist > GameConfig.ArriveDist * 2f)
                     {
-                        if (i == j) continue;
-                        
-                        var other = units[j];
-                        Vector2 toOther = other.Pos - u.Pos;
-                        float distToOther = toOther.Length();
-                        float avoidRadius = u.Radius + other.Radius + GameConfig.AvoidanceRange;
-                        
-                        // Check if other unit is within avoidance range
-                        if (distToOther < avoidRadius && distToOther > 0.001f)
+                        for (int j = 0; j < units.Length; j++)
                         {
-                            // Calculate avoidance direction (away from other unit)
-                            Vector2 avoidDir = -toOther / distToOther;
+                            if (i == j) continue;
                             
-                            // Stronger avoidance when closer
-                            float strength = (1f - (distToOther / avoidRadius));
+                            var other = units[j];
+                            Vector2 toOther = other.Pos - u.Pos;
+                            float distToOther = toOther.Length();
+                            float avoidRadius = u.Radius + other.Radius + GameConfig.AvoidanceRange;
                             
-                            // Only avoid stationary units (or slow moving ones)
-                            // Moving units can navigate around each other
-                            if (other.Vel.LengthSquared() < 10f * 10f) // slower than 10 units/sec
+                            // Check if other unit is within avoidance range
+                            if (distToOther < avoidRadius && distToOther > 0.001f)
                             {
-                                avoidanceForce += avoidDir * strength * GameConfig.AvoidanceStrength;
+                                // Calculate avoidance direction (away from other unit)
+                                Vector2 avoidDir = -toOther / distToOther;
+                                
+                                // Stronger avoidance when closer
+                                float strength = (1f - (distToOther / avoidRadius));
+                                
+                                // Only avoid stationary units (or slow moving ones)
+                                // Moving units can navigate around each other
+                                if (other.Vel.LengthSquared() < 10f * 10f) // slower than 10 units/sec
+                                {
+                                    // Reduce avoidance strength when near target to prevent circling
+                                    float avoidanceScale = (1f - arrivalFactor * 0.8f);
+                                    avoidanceForce += avoidDir * strength * GameConfig.AvoidanceStrength * avoidanceScale;
+                                }
                             }
                         }
                     }
                     
                     // Combine desired direction with avoidance
-                    Vector2 combinedDir = desiredDir + avoidanceForce * dt;
+                    // Weight avoidance less when we're very close to target
+                    Vector2 combinedDir = desiredDir + avoidanceForce * (1f - arrivalFactor * 0.9f);
                     
                     // Normalize if we have a direction
                     if (combinedDir.LengthSquared() > 0.001f)
@@ -437,8 +466,10 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
                     else
                     {
                         // Can move while rotating
+                        // Slow down as we approach target
+                        float speedScale = dist > 30f ? 1f : Math.Max(0.3f, dist / 30f);
                         Vector2 currentDir = new Vector2(MathF.Cos(u.Facing), MathF.Sin(u.Facing));
-                        u.Vel = currentDir * GameConfig.MaxSpeed;
+                        u.Vel = currentDir * GameConfig.MaxSpeed * speedScale;
                     }
                 }
             }
