@@ -320,8 +320,8 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
                 ui.Pos -= n * (penetration * 0.5f);
                 uj.Pos += n * (penetration * 0.5f);
                 // stop both and clear targets
-                ui.Vel = Vector2.Zero; ui.HasTarget = false;
-                uj.Vel = Vector2.Zero; uj.HasTarget = false;
+               // ui.Vel = Vector2.Zero; ui.HasTarget = false;
+              //  uj.Vel = Vector2.Zero; uj.HasTarget = false;
                 units[i] = ui;
                 units[j] = uj;
             }

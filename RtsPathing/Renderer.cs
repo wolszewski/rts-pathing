@@ -56,23 +56,28 @@ public static class Renderer
         // Draw units
         foreach (ref var u in units.AsSpan())
         {
-            Raylib.DrawCircleV(u.Pos, u.Radius, Color.SkyBlue);
-            if (u.Selected)
-            {
-                Raylib.DrawCircleLines((int)u.Pos.X, (int)u.Pos.Y, u.Radius + 1.5f, Color.Yellow);
-            }
-            // Draw facing direction arrow
-            Vector2 facingDir = new Vector2(MathF.Cos(u.Facing), MathF.Sin(u.Facing));
-            Vector2 arrowTip = u.Pos + facingDir * (u.Radius * 1.5f);
-            Raylib.DrawLineV(u.Pos, arrowTip, Color.Blue);
+            DrawUnit(ref u);
+        }
+    }
 
-            // Draw velocity indicator (optional - shows if movement matches facing)
-            if (u.Vel.LengthSquared() > 1e-6f)
-            {
-                Vector2 velDir = Vector2.Normalize(u.Vel);
-                Vector2 velTip = u.Pos + velDir * (u.Radius * 1.2f);
-                Raylib.DrawCircleV(velTip, 2f, Color.Green);
-            }
+    private static void DrawUnit(ref Unit u)
+    {
+        Raylib.DrawCircleV(u.Pos, u.Radius, Color.SkyBlue);
+        if (u.Selected)
+        {
+            Raylib.DrawCircleLines((int)u.Pos.X, (int)u.Pos.Y, u.Radius + 1.5f, Color.Yellow);
+        }
+        // Draw facing direction arrow
+        Vector2 facingDir = new Vector2(MathF.Cos(u.Facing), MathF.Sin(u.Facing));
+        Vector2 arrowTip = u.Pos + facingDir * (u.Radius * 1.5f);
+        Raylib.DrawLineV(u.Pos, arrowTip, Color.Blue);
+
+        // Draw velocity indicator (optional - shows if movement matches facing)
+        if (u.Vel.LengthSquared() > 1e-6f)
+        {
+            Vector2 velDir = Vector2.Normalize(u.Vel);
+            Vector2 velTip = u.Pos + velDir * (u.Radius * 1.2f);
+            Raylib.DrawCircleV(velTip, 2f, Color.Green);
         }
     }
 
