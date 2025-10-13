@@ -21,4 +21,9 @@ public struct Unit
     
     // Group movement
     public int GroupId;               // Units with same GroupId belong to the same formation
+    
+    // Push recovery
+    public Vector2 RestPosition;      // Position to return to when pushed (for stationary units)
+    public bool WasPushed;            // Flag indicating unit was pushed and needs to return
+    public float TotalPushDistance;   // Accumulates total distance pushed to trigger recovery
 }

@@ -42,7 +42,10 @@ for (int i = 0; i < unitCount; i++)
         Facing = 0f,
         StuckTimer = 0f,
         LastDistToTarget = 0f,
-        GroupId = 0  // 0 means no group
+        GroupId = 0,  // 0 means no group
+        RestPosition = p,  // Initial rest position
+        WasPushed = false,
+        TotalPushDistance = 0f
     };
 }
 
@@ -197,21 +200,25 @@ while (!Raylib.WindowShouldClose())
         
         if (selectedIndices.Count > 0)
         {
-            // Calculate formation positions around the clicked point
+            // Calculate formation positions around the clicked point (now size-aware)
             Vector2[] formationPositions;
             if (GameConfig.UseCircularFormation)
             {
                 formationPositions = FormationCalculator.CalculateCircularFormation(
                     clickWorld, 
                     selectedIndices.Count, 
-                    GameConfig.FormationSpacing);
+                    GameConfig.FormationSpacing,
+                    units,  // Pass unit array for size information
+                    selectedIndices.ToArray());  // Pass selected indices
             }
             else
             {
                 formationPositions = FormationCalculator.CalculateGridFormation(
                     clickWorld, 
                     selectedIndices.Count, 
-                    GameConfig.FormationSpacing);
+                    GameConfig.FormationSpacing,
+                    units,  // Pass unit array for size information
+                    selectedIndices.ToArray());  // Pass selected indices
             }
             
             // Assign formation positions to units
@@ -262,12 +269,51 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
     float sharpTurnThreshold = (180f - GameConfig.SharpTurnAngleDeg) * MathF.PI / 180f;
     // If angle difference is greater than this, unit stops to rotate in place
 
-    // 1) Move towards targets with collision avoidance
+    // 1) Move towards targets with collision avoidance (or return to rest position if pushed)
     for (int i = 0; i < units.Length; i++)
     {
         var u = units[i];
 
-        if (u.HasTarget)
+        // Check if unit was pushed and needs to return to rest position
+        if (u.WasPushed && !u.HasTarget)
+        {
+            Vector2 toRest = u.RestPosition - u.Pos;
+            float distToRest = toRest.Length();
+            
+            if (distToRest <= GameConfig.ArriveDist)
+            {
+                // Arrived back at rest position
+                u.WasPushed = false;
+                u.Vel = Vector2.Zero;
+                u.TotalPushDistance = 0f;
+            }
+            else
+            {
+                // Move back to rest position at reduced speed
+                var dir = toRest / distToRest;
+                float targetAngle = MathF.Atan2(dir.Y, dir.X);
+                
+                // Smooth rotation towards target angle
+                float initialAngleDiff = NormalizeAngle(targetAngle - u.Facing);
+                float maxRotation = GameConfig.RotationSpeed * dt;
+                
+                if (MathF.Abs(initialAngleDiff) <= maxRotation)
+                {
+                    u.Facing = targetAngle;
+                }
+                else
+                {
+                    u.Facing += MathF.Sign(initialAngleDiff) * maxRotation;
+                }
+                
+                u.Facing = NormalizeAngle(u.Facing);
+                
+                // Move at reduced speed toward rest position
+                Vector2 currentDir = new Vector2(MathF.Cos(u.Facing), MathF.Sin(u.Facing));
+                u.Vel = currentDir * GameConfig.ReturnToRestSpeed;
+            }
+        }
+        else if (u.HasTarget)
         {
             Vector2 to = u.Target - u.Pos;
             float dist = to.Length();
@@ -278,6 +324,9 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
                 u.HasTarget = false;
                 u.Vel = Vector2.Zero;
                 u.StuckTimer = 0f;
+                // Update rest position to new location
+                u.RestPosition = u.Pos;
+                u.WasPushed = false;
             }
             else
             {
@@ -295,6 +344,8 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
                         u.HasTarget = false;
                         u.Vel = Vector2.Zero;
                         u.StuckTimer = 0f;
+                        // Update rest position when giving up
+                        u.RestPosition = u.Pos;
                     }
                 }
                 else
@@ -410,7 +461,7 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
         units[i] = u;
     }
 
-    // 2) Unit-unit collision resolution with group awareness
+    // 2) Unit-unit collision resolution with group awareness and push recovery
     for (int i = 0; i < units.Length; i++)
     {
         for (int j = i + 1; j < units.Length; j++)
@@ -429,8 +480,8 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
                 float penetration = minDist - dist;
                 
                 // Check if units are moving or stationary
-                bool iMoving = ui.HasTarget && ui.Vel.LengthSquared() > 1f;
-                bool jMoving = uj.HasTarget && uj.Vel.LengthSquared() > 1f;
+                bool iMoving = (ui.HasTarget || ui.WasPushed) && ui.Vel.LengthSquared() > 1f;
+                bool jMoving = (uj.HasTarget || uj.WasPushed) && uj.Vel.LengthSquared() > 1f;
                 
                 // Check if units are in the same group
                 bool sameGroup = ui.GroupId > 0 && ui.GroupId == uj.GroupId;
@@ -443,46 +494,80 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
                 }
                 else if (iMoving && !jMoving)
                 {
+                    // i is moving, j is stationary
                     if (sameGroup)
                     {
-                        // Same group: moving unit can push stationary unit
-                        // Push stationary unit and wake it up
-                        uj.Pos += n * penetration;
+                        // Same group: push and wake up stationary unit
+                        // Use asymmetric push - moving unit pushes harder
+                        float movingPush = penetration * (1f - GameConfig.MovingUnitPushRatio);
+                        float stationaryPush = penetration * GameConfig.MovingUnitPushRatio;
                         
-                        // If stationary unit has a target (but stopped), reactivate it
+                        ui.Pos -= n * movingPush;  // Moving unit pushed back less
+                        uj.Pos += n * stationaryPush;  // Stationary unit pushed more
+                        
                         if (!uj.HasTarget && Vector2.Distance(uj.Pos, uj.Target) > GameConfig.ArriveDist)
                         {
                             uj.HasTarget = true;
                             uj.StuckTimer = 0f;
                             uj.LastDistToTarget = Vector2.Distance(uj.Pos, uj.Target);
+                            uj.WasPushed = false; // Clear pushed flag when reactivating
+                            uj.TotalPushDistance = 0f;
                         }
                     }
                     else
                     {
-                        // Different groups: only push moving unit back
-                        ui.Pos -= n * penetration;
+                        // Different groups: moving unit pushes harder than stationary
+                        float movingPush = penetration * (1f - GameConfig.MovingUnitPushRatio);
+                        float stationaryPush = penetration * GameConfig.MovingUnitPushRatio;
+                        
+                        ui.Pos -= n * movingPush;  // Moving unit pushed back less
+                        uj.Pos += n * stationaryPush;  // Stationary unit pushed more
+                        uj.TotalPushDistance += stationaryPush;
+                        
+                        // Mark unit as pushed if accumulated displacement is significant
+                        if (uj.TotalPushDistance > GameConfig.PushDistanceThreshold && !uj.WasPushed)
+                        {
+                            uj.WasPushed = true;
+                        }
                     }
                 }
                 else if (!iMoving && jMoving)
                 {
+                    // j is moving, i is stationary
                     if (sameGroup)
                     {
-                        // Same group: moving unit can push stationary unit
-                        // Push stationary unit and wake it up
-                        ui.Pos -= n * penetration;
+                        // Same group: push and wake up stationary unit
+                        // Use asymmetric push - moving unit pushes harder
+                        float movingPush = penetration * (1f - GameConfig.MovingUnitPushRatio);
+                        float stationaryPush = penetration * GameConfig.MovingUnitPushRatio;
                         
-                        // If stationary unit has a target (but stopped), reactivate it
+                        ui.Pos -= n * stationaryPush;  // Stationary unit pushed more
+                        uj.Pos += n * movingPush;  // Moving unit pushed back less
+                        
                         if (!ui.HasTarget && Vector2.Distance(ui.Pos, ui.Target) > GameConfig.ArriveDist)
                         {
                             ui.HasTarget = true;
                             ui.StuckTimer = 0f;
                             ui.LastDistToTarget = Vector2.Distance(ui.Pos, ui.Target);
+                            ui.WasPushed = false; // Clear pushed flag when reactivating
+                            ui.TotalPushDistance = 0f;
                         }
                     }
                     else
                     {
-                        // Different groups: only push moving unit back
-                        uj.Pos += n * penetration;
+                        // Different groups: moving unit pushes harder than stationary
+                        float movingPush = penetration * (1f - GameConfig.MovingUnitPushRatio);
+                        float stationaryPush = penetration * GameConfig.MovingUnitPushRatio;
+                        
+                        ui.Pos -= n * stationaryPush;  // Stationary unit pushed more
+                        uj.Pos += n * movingPush;  // Moving unit pushed back less
+                        ui.TotalPushDistance += stationaryPush;
+                        
+                        // Mark unit as pushed if accumulated displacement is significant
+                        if (ui.TotalPushDistance > GameConfig.PushDistanceThreshold && !ui.WasPushed)
+                        {
+                            ui.WasPushed = true;
+                        }
                     }
                 }
                 else
@@ -505,9 +590,4 @@ static float NormalizeAngle(float angle)
     while (angle > MathF.PI) angle -= MathF.PI * 2;
     while (angle < -MathF.PI) angle += MathF.PI * 2;
     return angle;
-}
-
-public static class GameClock
-{
-
 }
