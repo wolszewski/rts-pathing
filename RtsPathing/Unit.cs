@@ -14,4 +14,8 @@ public struct Unit
     public bool HasTarget;
     public Vector2 Target;
     public float Facing; // Angle in radians that the unit is currently facing
+    
+    // Stuck detection
+    public float StuckTimer;          // How long unit has been stuck
+    public float LastDistToTarget;    // Distance to target in previous frame
 }

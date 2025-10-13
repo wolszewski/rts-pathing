@@ -25,13 +25,24 @@ var obstacles = new (Vector2 A, Vector2 B)[] {
 
 // Units: simple circles with positions/vels (placeholder for your pathing)
 var rng = new Random(42);
-int unitCount = 40;
+int unitCount = 300;
 var units = new Unit[unitCount];
 for (int i = 0; i < unitCount; i++)
 {
     var p = new Vector2(rng.Next(-350, 351), rng.Next(-350, 351));
     var v = Vector2.Zero;
-    units[i] = new Unit { Pos = p, Vel = v, Radius = 8f, Selected = false, HasTarget = false, Target = p, Facing = 0f };
+    units[i] = new Unit
+    {
+        Pos = p,
+        Vel = v,
+        Radius = 4f + (float)rng.NextDouble()*10f,
+        Selected = false,
+        HasTarget = false,
+        Target = p,
+        Facing = 0f,
+        StuckTimer = 0f,
+        LastDistToTarget = 0f
+    };
 }
 
 // Init window
@@ -180,6 +191,8 @@ while (!Raylib.WindowShouldClose())
             var u = units[i];
             u.Target = clickWorld;
             u.HasTarget = true;
+            u.StuckTimer = 0f; // Reset stuck timer on new command
+            u.LastDistToTarget = Vector2.Distance(u.Pos, clickWorld);
             units[i] = u;
         }
     }
@@ -227,7 +240,7 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
     float sharpTurnThreshold = (180f - GameConfig.SharpTurnAngleDeg) * MathF.PI / 180f;
     // If angle difference is greater than this, unit stops to rotate in place
 
-    // 1) Move towards targets
+    // 1) Move towards targets with collision avoidance
     for (int i = 0; i < units.Length; i++)
     {
         var u = units[i];
@@ -236,50 +249,124 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
         {
             Vector2 to = u.Target - u.Pos;
             float dist = to.Length();
+            
+            // Check if unit arrived at target
             if (dist <= GameConfig.ArriveDist)
             {
                 u.HasTarget = false;
                 u.Vel = Vector2.Zero;
+                u.StuckTimer = 0f;
             }
             else
             {
-                var desiredDir = to / dist;
-                float targetAngle = MathF.Atan2(desiredDir.Y, desiredDir.X);
+                // Stuck detection: check if making progress
+                float progressRate = (u.LastDistToTarget - dist) / dt; // units per second
                 
-                // Calculate initial angle difference to determine if sharp turn is needed
-                float initialAngleDiff = NormalizeAngle(targetAngle - u.Facing);
-                
-                // Check if we need a sharp turn BEFORE rotating
-                bool isSharpTurn = MathF.Abs(initialAngleDiff) > sharpTurnThreshold;
-                
-                // Smooth rotation towards target angle
-                float maxRotation = GameConfig.RotationSpeed * dt;
-                
-                if (MathF.Abs(initialAngleDiff) <= maxRotation)
+                if (progressRate < GameConfig.StuckProgressThreshold)
                 {
-                    // Close enough, snap to target angle
-                    u.Facing = targetAngle;
+                    // Not making good progress, increment stuck timer
+                    u.StuckTimer += dt;
+                    
+                    if (u.StuckTimer >= GameConfig.StuckTimeThreshold)
+                    {
+                        // Stuck too long, give up on target
+                        u.HasTarget = false;
+                        u.Vel = Vector2.Zero;
+                        u.StuckTimer = 0f;
+                    }
                 }
                 else
                 {
-                    // Rotate by max amount in the correct direction
-                    u.Facing += MathF.Sign(initialAngleDiff) * maxRotation;
+                    // Making progress, reset stuck timer
+                    u.StuckTimer = 0f;
                 }
                 
-                // Normalize facing angle to [-PI, PI]
-                u.Facing = NormalizeAngle(u.Facing);
+                u.LastDistToTarget = dist;
                 
-                // Apply velocity based on whether it's a sharp turn
-                if (isSharpTurn)
+                // Only proceed with movement if still has target
+                if (u.HasTarget)
                 {
-                    // Sharp turn required - stop and rotate in place
-                    u.Vel = Vector2.Zero;
-                }
-                else
-                {
-                    // Can move while rotating
-                    Vector2 currentDir = new Vector2(MathF.Cos(u.Facing), MathF.Sin(u.Facing));
-                    u.Vel = currentDir * GameConfig.MaxSpeed;
+                    var desiredDir = to / dist;
+                    
+                    // Calculate avoidance force from nearby units
+                    Vector2 avoidanceForce = Vector2.Zero;
+                    for (int j = 0; j < units.Length; j++)
+                    {
+                        if (i == j) continue;
+                        
+                        var other = units[j];
+                        Vector2 toOther = other.Pos - u.Pos;
+                        float distToOther = toOther.Length();
+                        float avoidRadius = u.Radius + other.Radius + GameConfig.AvoidanceRange;
+                        
+                        // Check if other unit is within avoidance range
+                        if (distToOther < avoidRadius && distToOther > 0.001f)
+                        {
+                            // Calculate avoidance direction (away from other unit)
+                            Vector2 avoidDir = -toOther / distToOther;
+                            
+                            // Stronger avoidance when closer
+                            float strength = (1f - (distToOther / avoidRadius));
+                            
+                            // Only avoid stationary units (or slow moving ones)
+                            // Moving units can navigate around each other
+                            if (other.Vel.LengthSquared() < 10f * 10f) // slower than 10 units/sec
+                            {
+                                avoidanceForce += avoidDir * strength * GameConfig.AvoidanceStrength;
+                            }
+                        }
+                    }
+                    
+                    // Combine desired direction with avoidance
+                    Vector2 combinedDir = desiredDir + avoidanceForce * dt;
+                    
+                    // Normalize if we have a direction
+                    if (combinedDir.LengthSquared() > 0.001f)
+                    {
+                        combinedDir = Vector2.Normalize(combinedDir);
+                    }
+                    else
+                    {
+                        combinedDir = desiredDir;
+                    }
+                    
+                    float targetAngle = MathF.Atan2(combinedDir.Y, combinedDir.X);
+                    
+                    // Calculate initial angle difference to determine if sharp turn is needed
+                    float initialAngleDiff = NormalizeAngle(targetAngle - u.Facing);
+                    
+                    // Check if we need a sharp turn BEFORE rotating
+                    bool isSharpTurn = MathF.Abs(initialAngleDiff) > sharpTurnThreshold;
+                    
+                    // Smooth rotation towards target angle
+                    float maxRotation = GameConfig.RotationSpeed * dt;
+                    
+                    if (MathF.Abs(initialAngleDiff) <= maxRotation)
+                    {
+                        // Close enough, snap to target angle
+                        u.Facing = targetAngle;
+                    }
+                    else
+                    {
+                        // Rotate by max amount in the correct direction
+                        u.Facing += MathF.Sign(initialAngleDiff) * maxRotation;
+                    }
+                    
+                    // Normalize facing angle to [-PI, PI]
+                    u.Facing = NormalizeAngle(u.Facing);
+                    
+                    // Apply velocity based on whether it's a sharp turn
+                    if (isSharpTurn)
+                    {
+                        // Sharp turn required - stop and rotate in place
+                        u.Vel = Vector2.Zero;
+                    }
+                    else
+                    {
+                        // Can move while rotating
+                        Vector2 currentDir = new Vector2(MathF.Cos(u.Facing), MathF.Sin(u.Facing));
+                        u.Vel = currentDir * GameConfig.MaxSpeed;
+                    }
                 }
             }
         }
@@ -287,6 +374,7 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
         {
             // no target, stay
             u.Vel = Vector2.Zero;
+            u.StuckTimer = 0f;
         }
 
         // integrate
@@ -300,7 +388,7 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
         units[i] = u;
     }
 
-    // 2) Unit-unit collision detection and resolution (stop on collision)
+    // 2) Unit-unit collision resolution - only push stationary units apart
     for (int i = 0; i < units.Length; i++)
     {
         for (int j = i + 1; j < units.Length; j++)
@@ -311,17 +399,40 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
             float distSq = d.LengthSquared();
             float minDist = ui.Radius + uj.Radius;
             float minDistSq = minDist * minDist;
+            
             if (distSq < minDistSq)
             {
                 float dist = MathF.Sqrt(MathF.Max(distSq, 1e-6f));
                 Vector2 n = dist > 1e-5f ? d / dist : new Vector2(1f, 0f);
                 float penetration = minDist - dist;
-                // push apart evenly
-                ui.Pos -= n * (penetration * 0.5f);
-                uj.Pos += n * (penetration * 0.5f);
-                // stop both and clear targets
-               // ui.Vel = Vector2.Zero; ui.HasTarget = false;
-              //  uj.Vel = Vector2.Zero; uj.HasTarget = false;
+                
+                // Check if units are moving or stationary
+                bool iMoving = ui.HasTarget && ui.Vel.LengthSquared() > 1f;
+                bool jMoving = uj.HasTarget && uj.Vel.LengthSquared() > 1f;
+                
+                if (!iMoving && !jMoving)
+                {
+                    // Both stationary - push apart evenly
+                    ui.Pos -= n * (penetration * 0.5f);
+                    uj.Pos += n * (penetration * 0.5f);
+                }
+                else if (iMoving && !jMoving)
+                {
+                    // i is moving, j is stationary - only push i back
+                    ui.Pos -= n * penetration;
+                }
+                else if (!iMoving && jMoving)
+                {
+                    // j is moving, i is stationary - only push j back
+                    uj.Pos += n * penetration;
+                }
+                else
+                {
+                    // Both moving - push apart evenly (normal collision)
+                    ui.Pos -= n * (penetration * 0.5f);
+                    uj.Pos += n * (penetration * 0.5f);
+                }
+                
                 units[i] = ui;
                 units[j] = uj;
             }
