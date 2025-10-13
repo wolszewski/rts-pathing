@@ -19,6 +19,11 @@ public static class GameConfig
     public const float AvoidanceRange = 15f;        // distance at which units start avoiding each other
     public const float AvoidanceStrength = 0.3f;    // strength of avoidance force (reduced from 100f - should be on same scale as desired direction)
     
+    // Obstacle avoidance config
+    public const float ObstacleDetectionRange = 40f;  // how far ahead to look for obstacles
+    public const float ObstacleAvoidanceStrength = 1.5f; // strength of obstacle avoidance (stronger than unit avoidance)
+    public const float ObstacleBounceReduction = 0.7f;   // velocity reduction when bouncing off obstacles (0.7 = 70% kept)
+    
     // Formation config
     public const float FormationSpacing = 20f;      // space between units in formation
     public const bool UseCircularFormation = true; // true = circular, false = grid formation

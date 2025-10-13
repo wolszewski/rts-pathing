@@ -455,9 +455,12 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
                         }
                     }
                     
-                    // Combine desired direction with avoidance
+                    // Add obstacle avoidance force
+                    Vector2 obstacleAvoidance = CalculateObstacleAvoidance(u, obstacles, GameConfig.ObstacleDetectionRange);
+                    
+                    // Combine desired direction with unit and obstacle avoidance
                     // Weight avoidance less when we're very close to target
-                    Vector2 combinedDir = desiredDir + avoidanceForce * (1f - arrivalFactor * 0.9f);
+                    Vector2 combinedDir = desiredDir + avoidanceForce * (1f - arrivalFactor * 0.9f) + obstacleAvoidance;
                     
                     // Normalize if we have a direction
                     if (combinedDir.LengthSquared() > 0.001f)
@@ -520,6 +523,9 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
 
         // integrate
         u.Pos += u.Vel * dt;
+
+        // Handle obstacle collisions (bounce-back and slide)
+        HandleObstacleCollision(ref u, obstacles, dt);
 
         // crude world bounds
         const float B = 500f;
@@ -653,9 +659,136 @@ static void FixedUpdate(float dt, Unit[] units, (Vector2 A, Vector2 B)[] obstacl
 }
 
 // Helper to normalize angle to [-PI, PI] range
+
 static float NormalizeAngle(float angle)
 {
     while (angle > MathF.PI) angle -= MathF.PI * 2;
     while (angle < -MathF.PI) angle += MathF.PI * 2;
     return angle;
+}
+
+// Helper to find the closest point on a line segment to a given point
+static Vector2 ClosestPointOnSegment(Vector2 point, Vector2 segA, Vector2 segB)
+{
+    Vector2 ab = segB - segA;
+    float t = Vector2.Dot(point - segA, ab) / Vector2.Dot(ab, ab);
+    t = Math.Clamp(t, 0f, 1f);
+    return segA + ab * t;
+}
+
+// Helper to check if a circle intersects a line segment
+static bool CircleSegmentIntersect(Vector2 circlePos, float radius, Vector2 segA, Vector2 segB, out Vector2 closestPoint, out float distance)
+{
+    closestPoint = ClosestPointOnSegment(circlePos, segA, segB);
+    distance = Vector2.Distance(circlePos, closestPoint);
+    return distance <= radius;
+}
+
+// Calculate obstacle avoidance force for a unit
+static Vector2 CalculateObstacleAvoidance(Unit unit, (Vector2 A, Vector2 B)[] obstacles, float detectionRange)
+{
+    Vector2 avoidanceForce = Vector2.Zero;
+    
+    // Only check for obstacles if unit has velocity
+    if (unit.Vel.LengthSquared() < 0.1f)
+        return avoidanceForce;
+    
+    Vector2 velocityDir = Vector2.Normalize(unit.Vel);
+    
+    // Check each obstacle
+    foreach (var obstacle in obstacles)
+    {
+        // Calculate distance from unit to obstacle line segment
+        Vector2 closestPoint = ClosestPointOnSegment(unit.Pos, obstacle.A, obstacle.B);
+        float distToObstacle = Vector2.Distance(unit.Pos, closestPoint);
+        
+        // Check if obstacle is within detection range
+        if (distToObstacle > detectionRange + unit.Radius)
+            continue;
+        
+        // Calculate vector from closest point to unit (push away direction)
+        Vector2 awayFromObstacle = unit.Pos - closestPoint;
+        if (awayFromObstacle.LengthSquared() < 0.001f)
+        {
+            // If exactly on the line, push perpendicular to obstacle
+            Vector2 obstacleDir = Vector2.Normalize(obstacle.B - obstacle.A);
+            awayFromObstacle = new Vector2(-obstacleDir.Y, obstacleDir.X);
+        }
+        else
+        {
+            awayFromObstacle = Vector2.Normalize(awayFromObstacle);
+        }
+        
+        // Check if moving towards the obstacle
+        float approachDot = Vector2.Dot(velocityDir, -awayFromObstacle);
+        if (approachDot <= 0)
+            continue; // moving away or parallel
+        
+        // Stronger avoidance when closer and when heading more directly toward it
+        float distanceFactor = 1f - Math.Clamp(distToObstacle / (detectionRange + unit.Radius), 0f, 1f);
+        float approachFactor = approachDot; // 0 to 1, higher when moving directly toward obstacle
+        
+        float strength = distanceFactor * distanceFactor * approachFactor * GameConfig.ObstacleAvoidanceStrength;
+        avoidanceForce += awayFromObstacle * strength;
+    }
+    
+    return avoidanceForce;
+}
+
+// Handle collision with obstacles (bounce back and slide along)
+static void HandleObstacleCollision(ref Unit unit, (Vector2 A, Vector2 B)[] obstacles, float dt)
+{
+    foreach (var obstacle in obstacles)
+    {
+        if (CircleSegmentIntersect(unit.Pos, unit.Radius, obstacle.A, obstacle.B, out Vector2 closestPoint, out float distance))
+        {
+            // Unit is penetrating obstacle
+            float penetration = unit.Radius - distance;
+            
+            if (penetration > 0)
+            {
+                // Push unit out of obstacle
+                Vector2 pushDir = unit.Pos - closestPoint;
+                if (pushDir.LengthSquared() < 0.001f)
+                {
+                    // If exactly on line, push perpendicular
+                    Vector2 obstacleDir = Vector2.Normalize(obstacle.B - obstacle.A);
+                    pushDir = new Vector2(-obstacleDir.Y, obstacleDir.X);
+                }
+                else
+                {
+                    pushDir = Vector2.Normalize(pushDir);
+                }
+                
+                unit.Pos += pushDir * penetration;
+                
+                // Apply bounce/slide physics to velocity
+                if (unit.Vel.LengthSquared() > 0.001f)
+                {
+                    Vector2 obstacleDir = Vector2.Normalize(obstacle.B - obstacle.A);
+                    Vector2 normal = new Vector2(-obstacleDir.Y, obstacleDir.X);
+                    
+                    // Ensure normal points away from unit
+                    if (Vector2.Dot(normal, pushDir) < 0)
+                        normal = -normal;
+                    
+                    // Component of velocity along obstacle (slide)
+                    float slideComponent = Vector2.Dot(unit.Vel, obstacleDir);
+                    Vector2 slideVel = obstacleDir * slideComponent;
+                    
+                    // Component perpendicular to obstacle (bounce)
+                    float bounceComponent = Vector2.Dot(unit.Vel, normal);
+                    
+                    if (bounceComponent < 0) // moving into obstacle
+                    {
+                        // Bounce back with reduced velocity
+                        Vector2 bounceVel = -normal * bounceComponent * GameConfig.ObstacleBounceReduction;
+                        
+                        // Combine slide and bounce
+                        unit.Vel = slideVel * 0.9f + bounceVel; // reduce slide slightly for friction
+                    }
+                }
+            }
+        }
+    }
 }
