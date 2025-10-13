@@ -223,14 +223,88 @@ while (!Raylib.WindowShouldClose())
             }
             
             // Calculate paths for all units in the group
-            for (int i = 0; i < selectedIndices.Count; i++)
+            // Leader gets a direct path, followers use leader's path as guidance
+            var leaderPath = pathfinder.FindPath(units[leaderIdx].Pos, units[leaderIdx].Target);
+            
+            // If leader has no path, give all units direct paths
+            if (leaderPath == null || leaderPath.Count == 0)
             {
-                int unitIdx = selectedIndices[i];
-                var u = units[unitIdx];
-                u.IsGroupLeader = (unitIdx == leaderIdx);
-                u.Path = pathfinder.FindPath(u.Pos, u.Target);
-                u.CurrentWaypointIndex = 0;
-                units[unitIdx] = u;
+                // No pathfinding available, use direct movement
+                for (int i = 0; i < selectedIndices.Count; i++)
+                {
+                    int unitIdx = selectedIndices[i];
+                    var u = units[unitIdx];
+                    u.IsGroupLeader = (unitIdx == leaderIdx);
+                    u.Path = null; // Will use direct movement with local avoidance
+                    u.CurrentWaypointIndex = 0;
+                    units[unitIdx] = u;
+                }
+            }
+            else
+            {
+                // Check if group is split across obstacles by testing if all units
+                // can reach the leader's first waypoint without major detours
+                bool groupIsSplit = false;
+                if (leaderPath.Count > 1)
+                {
+                    Vector2 leaderFirstWaypoint = leaderPath[1]; // Second point (after start)
+                    int unitsOnOtherSide = 0;
+                    
+                    foreach (int unitIdx in selectedIndices)
+                    {
+                        if (unitIdx == leaderIdx) continue;
+                        
+                        // Simple heuristic: if direct distance to waypoint is much larger
+                        // than leader's path distance, unit is probably on other side of obstacle
+                        float directDist = Vector2.Distance(units[unitIdx].Pos, leaderFirstWaypoint);
+                        float leaderDist = Vector2.Distance(units[leaderIdx].Pos, leaderFirstWaypoint);
+                        
+                        if (directDist > leaderDist * 2.0f) // 2x threshold indicates split
+                        {
+                            unitsOnOtherSide++;
+                        }
+                    }
+                    
+                    // If more than 30% of units are on the other side, group is split
+                    groupIsSplit = unitsOnOtherSide > selectedIndices.Count * 0.3f;
+                }
+                
+                // Assign paths based on whether group is split
+                for (int i = 0; i < selectedIndices.Count; i++)
+                {
+                    int unitIdx = selectedIndices[i];
+                    var u = units[unitIdx];
+                    u.IsGroupLeader = (unitIdx == leaderIdx);
+                    
+                    if (unitIdx == leaderIdx)
+                    {
+                        // Leader uses direct path to formation center
+                        u.Path = leaderPath;
+                    }
+                    else if (groupIsSplit)
+                    {
+                        // Group is split - calculate individual path for each follower
+                        var individualPath = pathfinder.FindPath(u.Pos, u.Target);
+                        
+                        // If individual path fails, try adapted path as fallback
+                        if (individualPath == null || individualPath.Count <= 2)
+                        {
+                            u.Path = AdaptLeaderPathForFollower(u.Pos, u.Target, leaderPath);
+                        }
+                        else
+                        {
+                            u.Path = individualPath;
+                        }
+                    }
+                    else
+                    {
+                        // Group is together - followers adapt leader's path
+                        u.Path = AdaptLeaderPathForFollower(units[unitIdx].Pos, units[unitIdx].Target, leaderPath);
+                    }
+                    
+                    u.CurrentWaypointIndex = 0;
+                    units[unitIdx] = u;
+                }
             }
         }
     }
@@ -267,6 +341,48 @@ while (!Raylib.WindowShouldClose())
 }
 
 Raylib.CloseWindow();
+
+/// <summary>
+/// Adapts the leader's path for a follower unit by offsetting waypoints
+/// while maintaining the same general route (keeping group coherence).
+/// </summary>
+static List<Vector2>? AdaptLeaderPathForFollower(Vector2 followerStart, Vector2 followerGoal, List<Vector2>? leaderPath)
+{
+    // If leader has no path or very short path, follower gets direct path
+    if (leaderPath == null || leaderPath.Count <= 2)
+        return new List<Vector2> { followerStart, followerGoal };
+    
+    // Calculate offset from leader's start to follower's start
+    Vector2 startOffset = followerStart - leaderPath[0];
+    
+    // Calculate offset from leader's goal to follower's goal
+    Vector2 goalOffset = followerGoal - leaderPath[^1];
+    
+    // Create adapted path by interpolating the offset along the route
+    var adaptedPath = new List<Vector2>();
+    
+    for (int i = 0; i < leaderPath.Count; i++)
+    {
+        // Interpolation factor (0 at start, 1 at goal)
+        float t = i / (float)(leaderPath.Count - 1);
+        
+        // Blend between start offset and goal offset
+        Vector2 offset = Vector2.Lerp(startOffset, goalOffset, t);
+        
+        // Apply offset to leader's waypoint
+        Vector2 adaptedWaypoint = leaderPath[i] + offset;
+        adaptedPath.Add(adaptedWaypoint);
+    }
+    
+    // Ensure exact start and goal positions
+    if (adaptedPath.Count > 0)
+    {
+        adaptedPath[0] = followerStart;
+        adaptedPath[^1] = followerGoal;
+    }
+    
+    return adaptedPath;
+}
 
 
 static void DrawPaths(Unit[] units)
