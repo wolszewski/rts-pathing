@@ -27,4 +27,9 @@ public struct Unit
     public bool WasPushed;            // Flag indicating unit was pushed and needs to return
     public float TotalPushDistance;   // Accumulates total distance pushed to trigger recovery
     public float PushRecoveryTimer;   // How long unit has been trying to return to rest (prevents infinite circling)
+    
+    // Pathfinding
+    public List<Vector2>? Path;       // Current path waypoints (null if no path)
+    public int CurrentWaypointIndex;  // Index of next waypoint to reach
+    public bool IsGroupLeader;        // True if this unit calculates path for the group
 }

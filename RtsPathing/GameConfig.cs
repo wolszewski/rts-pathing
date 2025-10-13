@@ -24,6 +24,12 @@ public static class GameConfig
     public const float ObstacleAvoidanceStrength = 1.5f; // strength of obstacle avoidance (stronger than unit avoidance)
     public const float ObstacleBounceReduction = 0.7f;   // velocity reduction when bouncing off obstacles (0.7 = 70% kept)
     
+    // Pathfinding config
+    public const int GridCellSize = 50;              // size of each grid cell in world units
+    public const int GridWidth = 200;                // grid width in cells (200 * 50 = 10,000 world units)
+    public const int GridHeight = 200;               // grid height in cells (200 * 50 = 10,000 world units)
+    public const float PathfindingUpdateInterval = 0.5f; // seconds between path recalculations for groups
+    
     // Formation config
     public const float FormationSpacing = 20f;      // space between units in formation
     public const bool UseCircularFormation = true; // true = circular, false = grid formation
@@ -36,4 +42,10 @@ public static class GameConfig
     public const float MovingUnitPushRatio = 1f;   // How much moving unit pushes (0.75 = 75% to stationary, 25% pushback)
                                                        // Higher = moving unit pushes harder (closer to 1.0)
                                                        // Lower = more balanced (closer to 0.5)
+    
+    // World bounds (derived from grid)
+    public static float WorldMinX => -GridWidth * GridCellSize * 0.5f;  // -5000
+    public static float WorldMaxX => GridWidth * GridCellSize * 0.5f;   // 5000
+    public static float WorldMinY => -GridHeight * GridCellSize * 0.5f; // -5000
+    public static float WorldMaxY => GridHeight * GridCellSize * 0.5f;  // 5000
 }
