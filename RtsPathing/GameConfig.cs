@@ -3,7 +3,7 @@ public static class GameConfig
     public const int ScreenW = 1280;
     public const int ScreenH = 720;
     public const int TargetFps = 240;           // render cap (high so vsync/off works smoothly)
-    public const float TickDt = 0.01f;         // 5ms fixed tick (200 Hz)
+    public const float TickDt = 0.005f;         // 5ms fixed tick (200 Hz)
 
     // Movement & rotation config
     public const float MaxSpeed = 120f;         // units per second

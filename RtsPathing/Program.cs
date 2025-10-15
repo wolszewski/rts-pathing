@@ -323,10 +323,10 @@ while (!Raylib.WindowShouldClose())
 
     Raylib.BeginMode2D(cam);
 
-    Renderer.DrawGrid(100, GameConfig.GridCellSize); // Show 100×100 cells (half of 200×200)
-    Renderer.DrawObstacles(obstacles.ToArray());
-    DrawPaths(units); // Draw paths before units
-    Renderer.DrawUnits(units);
+    Renderer.DrawGrid(100, GameConfig.GridCellSize, cam); // Show 100×100 cells (half of 200×200)
+    int visibleObstacles = Renderer.DrawObstacles(obstacles.ToArray(), cam);
+    DrawPaths(units, cam); // Draw paths before units
+    int visibleUnits = Renderer.DrawUnits(units, cam);
     
     Raylib.EndMode2D();
 
@@ -335,7 +335,7 @@ while (!Raylib.WindowShouldClose())
         Renderer.DrawSelectionBox(selectStartScreen, selectEndScreen);
     }
 
-    Renderer.DrawOverlay(zoom, units, tickCounter);
+    Renderer.DrawOverlay(zoom, units, tickCounter, visibleUnits, visibleObstacles);
 
     Raylib.EndDrawing();
 }
@@ -385,12 +385,37 @@ static List<Vector2>? AdaptLeaderPathForFollower(Vector2 followerStart, Vector2 
 }
 
 
-static void DrawPaths(Unit[] units)
+static void DrawPaths(Unit[] units, Camera2D cam)
 {
+    // Get visible bounds for culling
+    Vector2 topLeft = Raylib.GetScreenToWorld2D(new Vector2(0, 0), cam);
+    Vector2 bottomRight = Raylib.GetScreenToWorld2D(new Vector2(GameConfig.ScreenW, GameConfig.ScreenH), cam);
+    
+    float minX = MathF.Min(topLeft.X, bottomRight.X);
+    float maxX = MathF.Max(topLeft.X, bottomRight.X);
+    float minY = MathF.Min(topLeft.Y, bottomRight.Y);
+    float maxY = MathF.Max(topLeft.Y, bottomRight.Y);
+    const float margin = 50f;
+    
     foreach (ref var u in units.AsSpan())
     {
         if (u.Path != null && u.Path.Count > 1)
         {
+            // Check if any part of the path is visible
+            bool pathVisible = false;
+            for (int i = u.CurrentWaypointIndex; i < u.Path.Count; i++)
+            {
+                var waypoint = u.Path[i];
+                if (waypoint.X >= minX - margin && waypoint.X <= maxX + margin &&
+                    waypoint.Y >= minY - margin && waypoint.Y <= maxY + margin)
+                {
+                    pathVisible = true;
+                    break;
+                }
+            }
+            
+            if (!pathVisible) continue;
+            
             // Draw path waypoints
             for (int i = u.CurrentWaypointIndex; i < u.Path.Count - 1; i++)
             {
